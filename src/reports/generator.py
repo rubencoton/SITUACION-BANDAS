@@ -52,13 +52,7 @@ class PdfReportGenerator:
         pdf_path = kind_dir / window.file_name
 
         charts_dir = self.settings.output_dir / "_charts" / window.file_stem
-        chart_paths = build_report_charts(
-            charts_dir,
-            analytics.state_distribution,
-            analytics.ranking_bands,
-            analytics.ranking_phases_critical,
-            analytics.heatmap_matrix,
-        )
+        chart_paths = self._expected_chart_paths(charts_dir)
 
         if pdf_path.exists() and not force:
             self.logger.info("Informe ya existente (idempotente): %s", pdf_path)
@@ -67,6 +61,14 @@ class PdfReportGenerator:
                 already_exists=True,
                 chart_paths=chart_paths,
             )
+
+        chart_paths = build_report_charts(
+            charts_dir,
+            analytics.state_distribution,
+            analytics.ranking_bands,
+            analytics.ranking_phases_critical,
+            analytics.heatmap_matrix,
+        )
 
         doc = SimpleDocTemplate(
             str(pdf_path),
@@ -233,3 +235,12 @@ class PdfReportGenerator:
         if not self.settings.logo_path.exists():
             return None
         return Image(str(self.settings.logo_path), width=3.5 * cm, height=3.5 * cm)
+
+    @staticmethod
+    def _expected_chart_paths(charts_dir: Path) -> dict[str, Path]:
+        return {
+            "state_distribution": charts_dir / "state_distribution.png",
+            "ranking_bands": charts_dir / "ranking_bands.png",
+            "ranking_phases_critical": charts_dir / "ranking_phases_critical.png",
+            "heatmap": charts_dir / "heatmap.png",
+        }

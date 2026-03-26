@@ -34,6 +34,8 @@ class GoogleDriveService:
         self.logger = logger
         self._token_cache: str | None = None
         self._token_expiry_epoch: float = 0.0
+        self._folders_cache_path = self.settings.history_dir / "drive_folders_cache.json"
+        self._http = requests.Session()
 
     def is_configured(self) -> bool:
         return bool(
@@ -104,19 +106,31 @@ class GoogleDriveService:
         self.logger.info("Creando carpeta Drive '%s' bajo parent %s", folder_name, parent_id)
         return self.create_folder(parent_id, folder_name)
 
-    def ensure_reports_structure(self, sheet_id: str) -> dict[str, str]:
+    def ensure_reports_structure(
+        self, sheet_id: str, force_refresh: bool = False
+    ) -> dict[str, str]:
+        if not force_refresh:
+            cached = self._load_cached_folder_ids(sheet_id)
+            if cached:
+                self.logger.info(
+                    "Usando cache de carpetas Drive para sheet %s.", sheet_id
+                )
+                return cached
+
         parent_id = self.resolve_sheet_parent_folder(sheet_id)
         informes = self.ensure_folder(parent_id, self.settings.drive_reports_root)
         semanal = self.ensure_folder(informes.file_id, self.settings.drive_weekly_folder)
         mensual = self.ensure_folder(informes.file_id, self.settings.drive_monthly_folder)
         anual = self.ensure_folder(informes.file_id, self.settings.drive_annual_folder)
-        return {
+        folder_ids = {
             "sheet_parent_id": parent_id,
             "informes_id": informes.file_id,
             "weekly_id": semanal.file_id,
             "monthly_id": mensual.file_id,
             "annual_id": anual.file_id,
         }
+        self._save_cached_folder_ids(sheet_id, folder_ids)
+        return folder_ids
 
     def find_pdf_by_name(self, parent_id: str, file_name: str) -> DriveFile | None:
         safe_name = file_name.replace("'", "\\'")
@@ -142,7 +156,7 @@ class GoogleDriveService:
     def upload_pdf(self, parent_id: str, local_file_path: Path, drive_name: str) -> DriveFile:
         metadata = {"name": drive_name, "parents": [parent_id]}
         with local_file_path.open("rb") as file_handle:
-            response = requests.post(
+            response = self._http.post(
                 "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType",
                 headers={"Authorization": f"Bearer {self._get_token()}"},
                 files={
@@ -174,7 +188,7 @@ class GoogleDriveService:
         json_payload: dict | None = None,
     ) -> dict:
         token = self._get_token()
-        response = requests.request(
+        response = self._http.request(
             method,
             url,
             params=params,
@@ -247,7 +261,7 @@ class GoogleDriveService:
             raise DriveAccessError(
                 f"No existe perfil '{self.settings.google_clasp_profile}' en {clasp_file}."
             )
-        response = requests.post(
+        response = self._http.post(
             "https://oauth2.googleapis.com/token",
             data={
                 "client_id": token_obj["client_id"],
@@ -267,3 +281,45 @@ class GoogleDriveService:
             raise DriveAccessError("No se obtuvo access_token desde .clasprc.")
         expires_in = int(data.get("expires_in", 3600))
         return token, expires_in
+
+    def _load_cached_folder_ids(self, sheet_id: str) -> dict[str, str] | None:
+        if not self._folders_cache_path.exists():
+            return None
+        try:
+            payload = json.loads(self._folders_cache_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return None
+            entry = payload.get(sheet_id)
+            if not isinstance(entry, dict):
+                return None
+            required = {
+                "sheet_parent_id",
+                "informes_id",
+                "weekly_id",
+                "monthly_id",
+                "annual_id",
+            }
+            if not required.issubset(set(entry.keys())):
+                return None
+            return {key: str(entry[key]) for key in required}
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return None
+
+    def _save_cached_folder_ids(self, sheet_id: str, folder_ids: dict[str, str]) -> None:
+        payload: dict[str, dict] = {}
+        if self._folders_cache_path.exists():
+            try:
+                raw = json.loads(self._folders_cache_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    payload = raw
+            except (json.JSONDecodeError, OSError):
+                payload = {}
+        payload[sheet_id] = {
+            **folder_ids,
+            "updated_at_epoch": int(time.time()),
+        }
+        self._folders_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self._folders_cache_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )

@@ -13,12 +13,23 @@ from src.ui.reports_page import render_reports_page
 
 st.set_page_config(
     page_title="SITUACION BANDAS",
-    page_icon="🎸",
+    page_icon="SB",
     layout="wide",
 )
 
 settings = load_settings()
 logger = configure_logging(settings.log_level, settings.log_dir)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_dataset_and_analytics(sheet_id: str):
+    local_settings = load_settings()
+    local_logger = configure_logging(local_settings.log_level, local_settings.log_dir)
+    reader = SheetsReader(local_settings, local_logger)
+    dataset = reader.extract_dataset(sheet_id)
+    analytics = compute_analytics(dataset.bands_df, dataset.phases_df)
+    return dataset, analytics
+
 
 st.title("SITUACION BANDAS")
 st.caption("Artes Buho | Dashboard operativo e informes corporativos")
@@ -33,9 +44,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-reader = SheetsReader(settings, logger)
-dataset = reader.extract_dataset(settings.google_sheet_id)
-analytics = compute_analytics(dataset.bands_df, dataset.phases_df)
+header_col1, header_col2 = st.columns([1, 1])
+with header_col1:
+    st.caption("Cache de datos: 5 minutos")
+with header_col2:
+    if st.button("Actualizar datos ahora"):
+        st.cache_data.clear()
+        st.rerun()
+
+dataset, analytics = _load_dataset_and_analytics(settings.google_sheet_id)
 
 tab_dashboard, tab_reports, tab_email = st.tabs(
     ["Dashboard", "Informes", "Preview correo"]

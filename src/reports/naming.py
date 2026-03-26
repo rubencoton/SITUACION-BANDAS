@@ -30,8 +30,11 @@ class ReportWindow:
     @property
     def period_label(self) -> str:
         if self.kind == REPORT_KIND_ANNUAL:
-            return f"Año {self.period_start.year}"
-        return f"{self.period_start.strftime('%d/%m/%Y')} - {self.period_end.strftime('%d/%m/%Y')}"
+            return f"Anio {self.period_start.year}"
+        return (
+            f"{self.period_start.strftime('%d/%m/%Y')} - "
+            f"{self.period_end.strftime('%d/%m/%Y')}"
+        )
 
 
 def now_local(timezone_name: str) -> datetime:

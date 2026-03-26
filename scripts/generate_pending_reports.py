@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.pipeline import run_single_report
+from src.pipeline import run_reports_for_kinds
 from src.reports.naming import (
     REPORT_KIND_ANNUAL,
     REPORT_KIND_MONTHLY,
@@ -18,7 +18,10 @@ from src.reports.naming import (
 
 
 if __name__ == "__main__":
-    results = []
-    for kind in (REPORT_KIND_WEEKLY, REPORT_KIND_MONTHLY, REPORT_KIND_ANNUAL):
-        results.append(asdict(run_single_report(kind=kind)))
+    results = [
+        asdict(item)
+        for item in run_reports_for_kinds(
+            [REPORT_KIND_WEEKLY, REPORT_KIND_MONTHLY, REPORT_KIND_ANNUAL]
+        )
+    ]
     print(json.dumps(results, ensure_ascii=False, indent=2))

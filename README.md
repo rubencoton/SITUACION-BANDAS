@@ -26,7 +26,8 @@ Sistema de cuadro de mando + informes corporativos PDF para **SITUACION BANDAS**
 - `src/reports/*`: naming, scheduler Europe/Madrid, graficos, PDF y uploader Drive.
 - `src/emailing/*`: preview + envio manual con provider abstraction y guardas de seguridad.
 - `src/pipeline.py`: orquestacion unica para scripts, UI y automatizaciones.
-- `app.py`: dashboard Streamlit reutilizando la misma logica.
+- `app.py`: dashboard Streamlit reutilizando la misma logica, con cache de 5 minutos.
+- `src/drive_service.py`: cache local de IDs de carpetas Drive (`data/history/drive_folders_cache.json`).
 
 Auditoria de partida: `docs/AUDITORIA_INICIAL_2026-03-26.md`.
 
@@ -54,7 +55,7 @@ Reglas implementadas:
 
 - Semanal (lunes 08:00 Europe/Madrid): `YYMMDD_InformeSemanal.pdf`
 - Mensual (dia 1 08:00 Europe/Madrid, mes anterior): `YYMM_InformeMensual.pdf`
-- Anual (1 enero 08:00 Europe/Madrid, año anterior): `YYYY_InformeAnual.pdf`
+- Anual (1 enero 08:00 Europe/Madrid, anio anterior): `YYYY_InformeAnual.pdf`
 
 Funciones:
 
@@ -70,6 +71,14 @@ Con tests para bordes de calendario y horario.
 - Cada informe guarda snapshot normalizado con KPIs, bandas y fases.
 - Comparativa contra el ultimo informe equivalente si existe.
 - Si no hay historial, se informa elegantemente en insights.
+- Evita duplicados de indice para un mismo `report_kind + report_token` (upsert en lugar de append ciego).
+
+## Optimizaciones aplicadas
+
+- Pipeline batch: cuando se generan varios informes en una misma ejecucion, la lectura/normalizacion se hace una sola vez.
+- PDF idempotente eficiente: si el informe ya existe y no se fuerza regeneracion, no se recalculan graficos.
+- Drive con cache: reutiliza IDs de carpetas para reducir llamadas API repetidas y reintenta con refresco si detecta 404.
+- Dashboard con cache temporal y boton de refresco manual.
 
 ## Correo (preparado, desactivado por defecto)
 

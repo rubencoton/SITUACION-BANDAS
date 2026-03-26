@@ -4,7 +4,7 @@ from src.data_model import normalize_phase, normalize_status, status_to_score
 
 
 def test_status_mapping_basic():
-    assert normalize_status("CRÍTICO") == "CRITICO"
+    assert normalize_status("CR\u00cdTICO") == "CRITICO"
     assert normalize_status("en proceso") == "EN PROCESO"
     assert normalize_status("OPTIMO") == "OPTIMO"
     assert status_to_score("CRITICO") == 0
@@ -19,4 +19,4 @@ def test_status_mapping_unknown():
 
 def test_phase_normalization():
     assert normalize_phase("1. IMAGEN") == "IMAGEN"
-    assert normalize_phase("3. PRODUCCIÓN") == "PRODUCCION"
+    assert normalize_phase("3. PRODUCCI\u00d3N") == "PRODUCCION"

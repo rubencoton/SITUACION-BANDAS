@@ -66,14 +66,13 @@ class HistoryRepository:
         )
 
         index = self._load_index()
-        index.append(
-            {
-                "report_kind": report_kind,
-                "report_token": report_token,
-                "generated_at": payload.generated_at,
-                "snapshot_path": str(snap_path),
-            }
-        )
+        new_entry = {
+            "report_kind": report_kind,
+            "report_token": report_token,
+            "generated_at": payload.generated_at,
+            "snapshot_path": str(snap_path),
+        }
+        index = self._upsert_entry(index, new_entry)
         self.index_path.write_text(
             json.dumps(index, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -90,7 +89,13 @@ class HistoryRepository:
         ]
         if not candidates:
             return None
-        candidates.sort(key=lambda x: x.get("report_token", ""), reverse=True)
+        candidates.sort(
+            key=lambda x: (
+                str(x.get("report_token", "")),
+                str(x.get("generated_at", "")),
+            ),
+            reverse=True,
+        )
         latest = candidates[0]
         snapshot_path = Path(latest["snapshot_path"])
         if not snapshot_path.exists():
@@ -107,3 +112,21 @@ class HistoryRepository:
             return []
         except json.JSONDecodeError:
             return []
+
+    @staticmethod
+    def _upsert_entry(index: list[dict], entry: dict) -> list[dict]:
+        updated: list[dict] = []
+        replaced = False
+        for item in index:
+            same_key = (
+                item.get("report_kind") == entry.get("report_kind")
+                and str(item.get("report_token")) == str(entry.get("report_token"))
+            )
+            if same_key:
+                updated.append(entry)
+                replaced = True
+            else:
+                updated.append(item)
+        if not replaced:
+            updated.append(entry)
+        return updated

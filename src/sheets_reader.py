@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 import json
 import logging
-import os
 import re
 import unicodedata
 from typing import Iterable
@@ -51,6 +50,7 @@ class SheetsReader:
     def __init__(self, settings: Settings, logger: logging.Logger):
         self.settings = settings
         self.logger = logger
+        self._http = requests.Session()
 
     def extract_dataset(self, sheet_id: str | None = None) -> NormalizedDataset:
         target_sheet_id = sheet_id or self.settings.google_sheet_id
@@ -116,7 +116,7 @@ class SheetsReader:
     def _download_public_export(self, sheet_id: str) -> bytes | None:
         url = PUBLIC_EXPORT_TEMPLATE.format(sheet_id=sheet_id)
         try:
-            response = requests.get(url, timeout=30)
+            response = self._http.get(url, timeout=30)
             response.raise_for_status()
             data = response.content
             if data.startswith(b"PK"):
@@ -136,7 +136,7 @@ class SheetsReader:
             return None
         headers = {"Authorization": f"Bearer {token}"}
         try:
-            response = requests.get(
+            response = self._http.get(
                 DRIVE_EXPORT_TEMPLATE.format(sheet_id=sheet_id),
                 headers=headers,
                 timeout=30,
@@ -196,7 +196,7 @@ class SheetsReader:
                 )
                 return None
             try:
-                response = requests.post(
+                response = self._http.post(
                     "https://oauth2.googleapis.com/token",
                     data={
                         "client_id": token_obj["client_id"],
@@ -222,31 +222,40 @@ class SheetsReader:
             return False
         return True
 
-    def _parse_sheet(self, ws, extraction_ts: datetime) -> tuple[BandRecord, list[PhaseStateRecord]]:
+    def _parse_sheet(
+        self, ws, extraction_ts: datetime
+    ) -> tuple[BandRecord, list[PhaseStateRecord]]:
+        label_index = self._build_label_index(ws)
         banda = self._read_field(
             ws,
             primary_coords=["B1", "C1"],
             label_aliases=["NOMBRE BANDA", "BANDA"],
+            label_index=label_index,
         )
         correo = self._read_field(
             ws,
             primary_coords=["B2", "C2"],
             label_aliases=["CORREO", "EMAIL"],
+            label_index=label_index,
         )
         asunto = self._read_field(
             ws,
             primary_coords=["B3", "C3"],
             label_aliases=["ASUNTO"],
+            label_index=label_index,
         )
         mensaje = self._read_field(
             ws,
             primary_coords=["B4", "C4"],
             label_aliases=["MENSAJE PERSONALIZADO", "MENSAJE"],
+            label_index=label_index,
         )
         last_sent_raw = ws["F2"].value
         if last_sent_raw in (None, ""):
             label_cell = self._find_label_cell(
-                ws, ["ULTIMO ENVIO:", "ULTIMO ENVIO", "ULTIMO ENVÍO", "ULTIMO ENVÍO:"]
+                ws,
+                ["ULTIMO ENVIO", "ULTIMO ENVIO:"],
+                label_index=label_index,
             )
             if label_cell:
                 row, col = label_cell
@@ -256,7 +265,7 @@ class SheetsReader:
                         last_sent_raw = candidate
                         break
         ultimo_envio = self._parse_datetime_value(last_sent_raw)
-        observaciones = self._read_observaciones(ws)
+        observaciones = self._read_observaciones(ws, label_index=label_index)
 
         band_record = BandRecord(
             banda=banda or ws.title.strip(),
@@ -284,13 +293,14 @@ class SheetsReader:
         ws,
         primary_coords: Iterable[str],
         label_aliases: Iterable[str],
+        label_index: dict[str, tuple[int, int]] | None = None,
     ) -> str:
         for coord in primary_coords:
             val = self._clean(ws[coord].value)
             if val:
                 return val
 
-        label_cell = self._find_label_cell(ws, label_aliases)
+        label_cell = self._find_label_cell(ws, label_aliases, label_index=label_index)
         if label_cell is None:
             return ""
 
@@ -301,8 +311,17 @@ class SheetsReader:
                 return value
         return ""
 
-    def _find_label_cell(self, ws, aliases: Iterable[str]) -> tuple[int, int] | None:
+    def _find_label_cell(
+        self,
+        ws,
+        aliases: Iterable[str],
+        label_index: dict[str, tuple[int, int]] | None = None,
+    ) -> tuple[int, int] | None:
         normalized_aliases = {self._normalize_label_text(alias) for alias in aliases}
+        if label_index:
+            for alias in normalized_aliases:
+                if alias in label_index:
+                    return label_index[alias]
         for row in range(1, 35):
             for col in range(1, 10):
                 val = self._normalize_label_text(
@@ -328,7 +347,22 @@ class SheetsReader:
         no_accents = re.sub(r"\s+", " ", no_accents)
         return no_accents
 
-    def _read_observaciones(self, ws) -> str:
+    def _build_label_index(self, ws) -> dict[str, tuple[int, int]]:
+        index: dict[str, tuple[int, int]] = {}
+        for row in range(1, 35):
+            for col in range(1, 10):
+                normalized = self._normalize_label_text(
+                    self._clean(ws.cell(row=row, column=col).value)
+                )
+                if normalized and normalized not in index:
+                    index[normalized] = (row, col)
+        return index
+
+    def _read_observaciones(
+        self,
+        ws,
+        label_index: dict[str, tuple[int, int]] | None = None,
+    ) -> str:
         values: list[str] = []
         for row in range(14, 18):
             for col in range(1, 7):
@@ -343,7 +377,9 @@ class SheetsReader:
                     dedup.append(item)
             return " | ".join(dedup)
 
-        label_cell = self._find_label_cell(ws, ["OBSERVACIONES"])
+        label_cell = self._find_label_cell(
+            ws, ["OBSERVACIONES"], label_index=label_index
+        )
         if not label_cell:
             return ""
         row, col = label_cell
