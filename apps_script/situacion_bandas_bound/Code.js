@@ -5,6 +5,68 @@ const QUEUE_SHEET_NAME = '_ENVIO_COLA';
 const OWNER_EMAIL = 'booking@artesbuhomanagement.com';
 const BRAND_NAME = 'Artes Buho';
 const FROM_REPLY_TO = 'booking@artesbuhomanagement.com';
+const STATIC_SHEET_ID = '__SHEET_ID__';
+const STATIC_ADMIN_KEY = '__BOUND_ADMIN_KEY__';
+
+function doGet(e) {
+  return routeWebRequest_(e);
+}
+
+function doPost(e) {
+  return routeWebRequest_(e);
+}
+
+function routeWebRequest_(e) {
+  try {
+    const request = parseWebRequest_(e);
+    verifyAdminKey_(request.adminKey);
+    const ss = getSpreadsheet_();
+
+    if (request.action === 'status') {
+      const pending = getPendingCount_(ss);
+      return jsonOutput_({
+        ok: true,
+        action: 'status',
+        spreadsheetId: ss.getId(),
+        pending: pending,
+      });
+    }
+
+    if (request.action === 'activate') {
+      const res = activateEnvioCorporativoInternal_(ss);
+      return jsonOutput_({ ok: true, action: 'activate', result: res });
+    }
+
+    if (request.action === 'prepare_all') {
+      const res = prepararBotonesTodasLasBandas_(ss);
+      return jsonOutput_({ ok: true, action: 'prepare_all', result: res });
+    }
+
+    if (request.action === 'activate_prepare') {
+      const r1 = activateEnvioCorporativoInternal_(ss);
+      const r2 = prepararBotonesTodasLasBandas_(ss);
+      return jsonOutput_({
+        ok: true,
+        action: 'activate_prepare',
+        activation: r1,
+        prepared: r2,
+      });
+    }
+
+    if (request.action === 'process_queue') {
+      const res = processQueue_(ss);
+      return jsonOutput_({ ok: true, action: 'process_queue', result: res });
+    }
+
+    return jsonOutput_({ ok: false, error: 'unknown_action' });
+  } catch (err) {
+    return jsonOutput_({
+      ok: false,
+      error: 'web_router_exception',
+      message: String(err && err.message ? err.message : err),
+    });
+  }
+}
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -18,32 +80,8 @@ function onOpen() {
 }
 
 function activarEnvioCorporativo() {
-  const user = Session.getActiveUser().getEmail();
-  if (user && user.toLowerCase() !== OWNER_EMAIL.toLowerCase()) {
-    throw new Error(
-      'Esta activacion debe ejecutarse con la cuenta corporativa: ' + OWNER_EMAIL
-    );
-  }
-
-  const ss = SpreadsheetApp.getActive();
-  ensureQueueSheet_();
-  deleteManagedTriggers_();
-
-  ScriptApp.newTrigger('onEditRouter')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
-  ScriptApp.newTrigger('processQueueTick')
-    .timeBased()
-    .everyMinutes(1)
-    .create();
-
-  return {
-    ok: true,
-    message: 'Envio corporativo activado. Trigger onEdit + trigger cada minuto creados.',
-    owner: OWNER_EMAIL,
-  };
+  const ss = getSpreadsheet_();
+  return activateEnvioCorporativoInternal_(ss);
 }
 
 function prepararBotonHojaActual() {
@@ -91,15 +129,18 @@ function onEditRouter(e) {
 }
 
 function processQueueTick() {
-  processQueue_();
+  const ss = getSpreadsheet_();
+  processQueue_(ss);
 }
 
 function procesarColaAhora() {
-  return processQueue_();
+  const ss = getSpreadsheet_();
+  return processQueue_(ss);
 }
 
-function processQueue_() {
-  const queueSheet = ensureQueueSheet_();
+function processQueue_(ss) {
+  const targetSs = ss || getSpreadsheet_();
+  const queueSheet = ensureQueueSheet_(targetSs);
   const lastRow = queueSheet.getLastRow();
   if (lastRow < 2) {
     return { ok: true, processed: 0, pending: 0 };
@@ -118,7 +159,7 @@ function processQueue_() {
     pending++;
     const sheetName = String(row[2] || '');
     try {
-      sendForSheetName_(sheetName);
+      sendForSheetName_(sheetName, targetSs);
       queueSheet.getRange(rowNumber, 6).setValue('SENT');
       queueSheet.getRange(rowNumber, 7).setValue(new Date());
       processed++;
@@ -134,7 +175,7 @@ function processQueue_() {
 }
 
 function sendForSheetName_(sheetName) {
-  const ss = SpreadsheetApp.getActive();
+  const ss = getSpreadsheet_();
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     throw new Error('No existe hoja: ' + sheetName);
@@ -159,7 +200,7 @@ function sendForSheetName_(sheetName) {
 }
 
 function enqueueSheetSend_(sheet) {
-  const queue = ensureQueueSheet_();
+  const queue = ensureQueueSheet_(sheet.getParent());
   queue.appendRow([
     Utilities.getUuid(),
     new Date(),
@@ -199,11 +240,11 @@ function readBandPayload_(sheet) {
   return { to, subject, body, banda };
 }
 
-function ensureQueueSheet_() {
-  const ss = SpreadsheetApp.getActive();
-  let sheet = ss.getSheetByName(QUEUE_SHEET_NAME);
+function ensureQueueSheet_(ss) {
+  const targetSs = ss || getSpreadsheet_();
+  let sheet = targetSs.getSheetByName(QUEUE_SHEET_NAME);
   if (!sheet) {
-    sheet = ss.insertSheet(QUEUE_SHEET_NAME);
+    sheet = targetSs.insertSheet(QUEUE_SHEET_NAME);
     sheet.appendRow([
       'request_id',
       'created_at',
@@ -216,6 +257,120 @@ function ensureQueueSheet_() {
     sheet.hideSheet();
   }
   return sheet;
+}
+
+function prepareButtonForSheet_(sheet) {
+  if (!sheet) {
+    return;
+  }
+  const name = String(sheet.getName() || '').toUpperCase();
+  if (name === SHEET_MODEL_NAME || name === QUEUE_SHEET_NAME) {
+    return;
+  }
+  const rng = sheet.getRange(BUTTON_CELL);
+  rng.setValue(BUTTON_LABEL);
+  rng.setFontWeight('bold');
+  rng.setBackground('#C62828');
+  rng.setFontColor('#FFFFFF');
+  rng.setHorizontalAlignment('center');
+  rng.setNote(
+    'Escribe ENVIAR y pulsa Enter. Se enviara desde la cuenta corporativa cuando la cola se procese.'
+  );
+}
+
+function prepararBotonesTodasLasBandas_(ss) {
+  const targetSs = ss || getSpreadsheet_();
+  const sheets = targetSs.getSheets();
+  let total = 0;
+  sheets.forEach((s) => {
+    const n = String(s.getName() || '').toUpperCase();
+    if (n === SHEET_MODEL_NAME || n === QUEUE_SHEET_NAME) {
+      return;
+    }
+    prepareButtonForSheet_(s);
+    total++;
+  });
+  return { ok: true, preparedSheets: total };
+}
+
+function activateEnvioCorporativoInternal_(ss) {
+  const targetSs = ss || getSpreadsheet_();
+  ensureQueueSheet_(targetSs);
+  deleteManagedTriggers_();
+
+  ScriptApp.newTrigger('onEditRouter')
+    .forSpreadsheet(targetSs)
+    .onEdit()
+    .create();
+
+  ScriptApp.newTrigger('processQueueTick')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+
+  return {
+    ok: true,
+    message: 'Envio corporativo activado. Trigger onEdit + trigger cada minuto creados.',
+    owner: OWNER_EMAIL,
+    spreadsheetId: targetSs.getId(),
+  };
+}
+
+function getSpreadsheet_() {
+  if (STATIC_SHEET_ID && STATIC_SHEET_ID !== '__SHEET_ID__') {
+    return SpreadsheetApp.openById(STATIC_SHEET_ID);
+  }
+  const active = SpreadsheetApp.getActive();
+  if (!active) {
+    throw new Error('No hay spreadsheet activo disponible.');
+  }
+  return active;
+}
+
+function getPendingCount_(ss) {
+  const queue = ensureQueueSheet_(ss);
+  const lastRow = queue.getLastRow();
+  if (lastRow < 2) {
+    return 0;
+  }
+  const values = queue.getRange(2, 6, lastRow - 1, 1).getValues();
+  let pending = 0;
+  values.forEach((v) => {
+    if (String(v[0] || '') === 'PENDING') {
+      pending++;
+    }
+  });
+  return pending;
+}
+
+function parseWebRequest_(e) {
+  const action = e && e.parameter ? String(e.parameter.action || '').trim() : '';
+  let adminKey = e && e.parameter ? String(e.parameter.key || '') : '';
+  if (e && e.postData && e.postData.contents) {
+    try {
+      const body = JSON.parse(e.postData.contents);
+      if (!adminKey && body && body.key) {
+        adminKey = String(body.key);
+      }
+    } catch (err) {}
+  }
+  return { action: action || 'status', adminKey: adminKey };
+}
+
+function verifyAdminKey_(incoming) {
+  const key = String(incoming || '');
+  if (!STATIC_ADMIN_KEY || STATIC_ADMIN_KEY === '__BOUND_ADMIN_KEY__') {
+    throw new Error('Admin key no configurada.');
+  }
+  if (key !== STATIC_ADMIN_KEY) {
+    throw new Error('Admin key invalida.');
+  }
+}
+
+function jsonOutput_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function deleteManagedTriggers_() {
