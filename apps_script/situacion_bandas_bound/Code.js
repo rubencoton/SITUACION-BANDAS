@@ -73,6 +73,7 @@ function onOpen() {
     .createMenu('SITUACION BANDAS')
     .addItem('Activar envio corporativo (1 vez)', 'activarEnvioCorporativo')
     .addItem('Preparar boton en hoja actual', 'prepararBotonHojaActual')
+    .addItem('Preparar botones en todas las hojas', 'prepararBotonesTodasLasBandas')
     .addSeparator()
     .addItem('Enviar hoja actual (cola)', 'enviarInformeDesdeBoton')
     .addItem('Procesar cola ahora', 'procesarColaAhora')
@@ -99,6 +100,11 @@ function prepararBotonHojaActual() {
     'Escribe ENVIAR y pulsa Enter. Se enviara desde la cuenta corporativa cuando la cola se procese.'
   );
   return { ok: true, sheet: sheet.getName(), cell: BUTTON_CELL };
+}
+
+function prepararBotonesTodasLasBandas() {
+  const ss = getSpreadsheet_();
+  return prepararBotonesTodasLasBandas_(ss);
 }
 
 function enviarInformeDesdeBoton() {
