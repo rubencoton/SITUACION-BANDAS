@@ -83,6 +83,25 @@ Con tests para bordes de calendario y horario.
   - `--confirm-live` obligatorio para live
   - sin credenciales hardcodeadas
 
+## Envio desde cualquier cuenta en la Sheet (modo corporativo)
+
+Se incluye Apps Script ligado a la hoja para este flujo:
+
+1. Cualquier operador marca `ENVIAR` en `H1` dentro de la hoja de banda.
+2. La solicitud entra en una cola tecnica (`_ENVIO_COLA`).
+3. Un trigger instalable creado por `booking@artesbuhomanagement.com` procesa la cola.
+4. El correo sale desde la cuenta corporativa (no desde la cuenta del operador).
+
+Archivos de Apps Script:
+
+- `apps_script/situacion_bandas_bound/Code.js`
+- `apps_script/situacion_bandas_bound/appsscript.json`
+
+Activacion necesaria (una sola vez, cuenta booking):
+
+- Menu `SITUACION BANDAS` -> `Activar envio corporativo (1 vez)`
+- Menu `SITUACION BANDAS` -> `Preparar boton en hoja actual`
+
 ## Instalacion local
 
 1. Crear entorno:
