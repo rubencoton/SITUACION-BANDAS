@@ -32,6 +32,14 @@ function routeWebRequest_(e) {
       });
     }
 
+    if (request.action === 'mail_health') {
+      return jsonOutput_({
+        ok: true,
+        action: 'mail_health',
+        remainingDailyQuota: MailApp.getRemainingDailyQuota(),
+      });
+    }
+
     if (request.action === 'debug') {
       return jsonOutput_({
         ok: true,
