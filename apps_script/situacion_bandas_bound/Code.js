@@ -138,8 +138,7 @@ function prepararBotonesTodasLasBandas() {
 
 function enviarInformeDesdeBoton() {
   const sheet = SpreadsheetApp.getActiveSheet();
-  enqueueSheetSend_(sheet);
-  return { ok: true, queued: true, sheet: sheet.getName() };
+  return confirmarYEncolarHoja_(sheet);
 }
 
 function enviarHojaActualConConfirmacion() {
