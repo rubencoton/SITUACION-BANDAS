@@ -5,8 +5,8 @@ const QUEUE_SHEET_NAME = '_ENVIO_COLA';
 const OWNER_EMAIL = 'booking@artesbuhomanagement.com';
 const BRAND_NAME = 'Artes Buho';
 const FROM_REPLY_TO = 'booking@artesbuhomanagement.com';
-const STATIC_SHEET_ID = '__SHEET_ID__';
-const STATIC_ADMIN_KEY = '__BOUND_ADMIN_KEY__';
+const STATIC_SHEET_ID = '1YUOtxFLvryw_LmkoI2NB3FBeNucw0hFDdQa2qflr-xs';
+const STATIC_ADMIN_KEY = 'ACTIVA_49a6e7e192d14f0e851e';
 
 function doGet(e) {
   return routeWebRequest_(e);
@@ -29,6 +29,21 @@ function routeWebRequest_(e) {
         action: 'status',
         spreadsheetId: ss.getId(),
         pending: pending,
+      });
+    }
+
+    if (request.action === 'debug') {
+      return jsonOutput_({
+        ok: true,
+        action: 'debug',
+        spreadsheetConfigured: Boolean(
+          STATIC_SHEET_ID && !/^__.*__$/.test(STATIC_SHEET_ID)
+        ),
+        spreadsheetId: STATIC_SHEET_ID,
+        adminConfigured: Boolean(
+          STATIC_ADMIN_KEY && !/^__.*__$/.test(STATIC_ADMIN_KEY)
+        ),
+        adminKeyPrefix: STATIC_ADMIN_KEY ? String(STATIC_ADMIN_KEY).slice(0, 8) : '',
       });
     }
 
@@ -323,7 +338,7 @@ function activateEnvioCorporativoInternal_(ss) {
 }
 
 function getSpreadsheet_() {
-  if (STATIC_SHEET_ID && STATIC_SHEET_ID !== '__SHEET_ID__') {
+  if (STATIC_SHEET_ID && !/^__.*__$/.test(STATIC_SHEET_ID)) {
     return SpreadsheetApp.openById(STATIC_SHEET_ID);
   }
   const active = SpreadsheetApp.getActive();
@@ -365,7 +380,7 @@ function parseWebRequest_(e) {
 
 function verifyAdminKey_(incoming) {
   const key = String(incoming || '');
-  if (!STATIC_ADMIN_KEY || STATIC_ADMIN_KEY === '__BOUND_ADMIN_KEY__') {
+  if (!STATIC_ADMIN_KEY || /^__.*__$/.test(STATIC_ADMIN_KEY)) {
     throw new Error('Admin key no configurada.');
   }
   if (key !== STATIC_ADMIN_KEY) {
