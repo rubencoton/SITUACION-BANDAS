@@ -4,7 +4,13 @@ const BUTTON_LABEL = 'ENVIAR';
 const BUTTON_QUEUED_LABEL = 'EN COLA';
 const BUTTON_CANCELLED_LABEL = 'CANCELADO';
 const BUTTON_PENDING_CONFIRM_LABEL = 'PENDIENTE_CONFIRMACION';
+const BUTTON_SENT_LABEL = 'ENVIADO';
 const QUEUE_SHEET_NAME = '_ENVIO_COLA';
+const QUEUE_STATUS_PENDING = 'PENDING';
+const QUEUE_STATUS_SENT = 'SENT';
+const QUEUE_STATUS_ERROR = 'ERROR';
+const QUEUE_MAX_SENDS_PER_TICK = 20;
+const QUEUE_REQUESTED_BY = 'manual_or_trigger';
 const OWNER_EMAIL = 'booking@artesbuhomanagement.com';
 const BRAND_NAME = 'Artes Buho';
 const FROM_REPLY_TO = 'booking@artesbuhomanagement.com';
@@ -118,10 +124,7 @@ function prepararBotonHojaActual() {
   }
   const rng = sheet.getRange(BUTTON_CELL);
   rng.setValue(BUTTON_LABEL);
-  rng.setFontWeight('bold');
-  rng.setBackground('#C62828');
-  rng.setFontColor('#FFFFFF');
-  rng.setHorizontalAlignment('center');
+  applyButtonStyle_(rng);
   rng.setNote(
     'Pulsa ENVIAR y confirma en la ventana emergente. Si no aparece popup, usa menu SITUACION BANDAS > ENVIAR (con confirmacion).'
   );
@@ -162,14 +165,12 @@ function onEditRouter(e) {
   }
 
   try {
-    const result = confirmarYEncolarHoja_(sheet);
-    if (!result.queued) {
-      e.range.setValue(BUTTON_CANCELLED_LABEL);
-    }
+    confirmarYEncolarHoja_(sheet);
   } catch (err) {
     // En algunos contextos de trigger no hay UI para popup.
-    e.range.setValue(BUTTON_PENDING_CONFIRM_LABEL);
-    e.range.setNote(
+    setButtonState_(
+      sheet,
+      BUTTON_PENDING_CONFIRM_LABEL,
       'No se pudo abrir popup de confirmacion desde esta accion. Usa menu SITUACION BANDAS > ENVIAR (con confirmacion).'
     );
   }
@@ -186,44 +187,76 @@ function procesarColaAhora() {
 }
 
 function processQueue_(ss) {
-  const targetSs = ss || getSpreadsheet_();
-  const queueSheet = ensureQueueSheet_(targetSs);
-  const lastRow = queueSheet.getLastRow();
-  if (lastRow < 2) {
-    return { ok: true, processed: 0, pending: 0 };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) {
+    return {
+      ok: false,
+      processed: 0,
+      pending: 0,
+      reason: 'queue_locked',
+    };
   }
 
-  const rows = queueSheet.getRange(2, 1, lastRow - 1, 7).getValues();
-  let processed = 0;
-  let pending = 0;
-
-  rows.forEach((row, idx) => {
-    const rowNumber = idx + 2;
-    const status = String(row[5] || '');
-    if (status !== 'PENDING') {
-      return;
+  try {
+    const targetSs = ss || getSpreadsheet_();
+    const queueSheet = ensureQueueSheet_(targetSs);
+    const lastRow = queueSheet.getLastRow();
+    if (lastRow < 2) {
+      return { ok: true, processed: 0, attempted: 0, pending: 0, remaining: 0 };
     }
-    pending++;
-    const sheetName = String(row[2] || '');
-    try {
-      sendForSheetName_(sheetName, targetSs);
-      queueSheet.getRange(rowNumber, 6).setValue('SENT');
-      queueSheet.getRange(rowNumber, 7).setValue(new Date());
-      processed++;
-    } catch (err) {
-      queueSheet.getRange(rowNumber, 6).setValue('ERROR');
-      queueSheet.getRange(rowNumber, 7).setValue(
-        String(err && err.message ? err.message : err)
-      );
-    }
-  });
 
-  return { ok: true, processed: processed, pending: pending };
+    const rows = queueSheet.getRange(2, 1, lastRow - 1, 7).getValues();
+    const statusUpdates = [];
+    const resultUpdates = [];
+    let processed = 0;
+    let attempted = 0;
+    let pending = 0;
+
+    rows.forEach((row, idx) => {
+      const status = String(row[5] || '');
+      if (status !== QUEUE_STATUS_PENDING) {
+        return;
+      }
+
+      pending++;
+      if (attempted >= QUEUE_MAX_SENDS_PER_TICK) {
+        return;
+      }
+
+      const rowNumber = idx + 2;
+      const sheetName = String(row[2] || '');
+      attempted++;
+
+      try {
+        sendForSheetName_(sheetName, targetSs);
+        statusUpdates.push([rowNumber, QUEUE_STATUS_SENT]);
+        resultUpdates.push([rowNumber, new Date()]);
+        processed++;
+      } catch (err) {
+        statusUpdates.push([rowNumber, QUEUE_STATUS_ERROR]);
+        resultUpdates.push([rowNumber, String(err && err.message ? err.message : err)]);
+      }
+    });
+
+    writeColumnUpdates_(queueSheet, 6, statusUpdates);
+    writeColumnUpdates_(queueSheet, 7, resultUpdates);
+
+    return {
+      ok: true,
+      processed: processed,
+      attempted: attempted,
+      pending: pending,
+      remaining: Math.max(pending - attempted, 0),
+      batchLimit: QUEUE_MAX_SENDS_PER_TICK,
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
-function sendForSheetName_(sheetName) {
-  const ss = getSpreadsheet_();
-  const sheet = ss.getSheetByName(sheetName);
+function sendForSheetName_(sheetName, ss) {
+  const targetSs = ss || getSpreadsheet_();
+  const sheet = targetSs.getSheetByName(sheetName);
   if (!sheet) {
     throw new Error('No existe hoja: ' + sheetName);
   }
@@ -242,31 +275,25 @@ function sendForSheetName_(sheetName) {
   });
 
   sheet.getRange('F2').setValue(new Date());
-  sheet.getRange(BUTTON_CELL).setValue('ENVIADO');
+  setButtonState_(sheet, BUTTON_SENT_LABEL);
   return { ok: true, to: data.to, subject: data.subject };
 }
 
 function enqueueSheetSend_(sheet) {
   const queue = ensureQueueSheet_(sheet.getParent());
-  const actorEmail = safeUserEmail_();
+  if (hasPendingRequestForSheet_(queue, sheet.getName())) {
+    return { ok: true, queued: false, duplicate: true };
+  }
   queue.appendRow([
     Utilities.getUuid(),
     new Date(),
     sheet.getName(),
-    actorEmail,
-    actorEmail,
-    'PENDING',
+    QUEUE_REQUESTED_BY,
+    OWNER_EMAIL,
+    QUEUE_STATUS_PENDING,
     '',
   ]);
-}
-
-function safeUserEmail_() {
-  try {
-    const email = Session.getActiveUser().getEmail();
-    return String(email || '');
-  } catch (err) {
-    return '';
-  }
+  return { ok: true, queued: true, duplicate: false };
 }
 
 function confirmarYEncolarHoja_(sheet) {
@@ -297,32 +324,36 @@ function confirmarYEncolarHoja_(sheet) {
   );
 
   if (decision !== ui.Button.YES) {
-    sheet.getRange(BUTTON_CELL).setValue(BUTTON_CANCELLED_LABEL);
+    setButtonState_(sheet, BUTTON_CANCELLED_LABEL);
     return { ok: true, queued: false, cancelled: true, sheet: sheetName };
   }
 
-  enqueueSheetSend_(sheet);
-  sheet.getRange(BUTTON_CELL).setValue(BUTTON_QUEUED_LABEL);
-  return { ok: true, queued: true, sheet: sheetName };
+  const enqueueResult = enqueueSheetSend_(sheet);
+  setButtonState_(sheet, BUTTON_QUEUED_LABEL);
+  return {
+    ok: true,
+    queued: enqueueResult.queued,
+    duplicate: enqueueResult.duplicate,
+    sheet: sheetName,
+  };
 }
 
 function readBandPayload_(sheet) {
-  const banda = String(sheet.getRange('B1').getValue() || sheet.getName()).trim();
-  const to = String(sheet.getRange('B2').getValue() || '').trim();
-  const subject = String(
-    sheet.getRange('B3').getValue() || ('Estado del proyecto: ' + banda)
-  ).trim();
-  const mensaje = String(sheet.getRange('B4').getValue() || '').trim();
-  const obs = String(sheet.getRange('A14').getValue() || '').trim();
+  const block = sheet.getRange('A1:B14').getDisplayValues();
+  const banda = String(block[0][1] || sheet.getName()).trim();
+  const to = String(block[1][1] || '').trim();
+  const subject = String(block[2][1] || ('Estado del proyecto: ' + banda)).trim();
+  const mensaje = String(block[3][1] || '').trim();
+  const obs = String(block[13][0] || '').trim();
 
   const fases = [];
-  for (let row = 7; row <= 11; row++) {
-    const fase = String(sheet.getRange('A' + row).getValue() || '').trim();
-    const estado = String(sheet.getRange('B' + row).getValue() || '').trim();
+  block.slice(6, 11).forEach((row) => {
+    const fase = String(row[0] || '').trim();
+    const estado = String(row[1] || '').trim();
     if (fase) {
       fases.push(fase + ': ' + estado);
     }
-  }
+  });
 
   const body =
     'Banda: ' + banda + '\n' +
@@ -363,10 +394,7 @@ function prepareButtonForSheet_(sheet) {
   }
   const rng = sheet.getRange(BUTTON_CELL);
   rng.setValue(BUTTON_LABEL);
-  rng.setFontWeight('bold');
-  rng.setBackground('#C62828');
-  rng.setFontColor('#FFFFFF');
-  rng.setHorizontalAlignment('center');
+  applyButtonStyle_(rng);
   rng.setNote(
     'Pulsa ENVIAR y confirma en la ventana emergente. Si no aparece popup, usa menu SITUACION BANDAS > ENVIAR (con confirmacion).'
   );
@@ -430,11 +458,70 @@ function getPendingCount_(ss) {
   const values = queue.getRange(2, 6, lastRow - 1, 1).getValues();
   let pending = 0;
   values.forEach((v) => {
-    if (String(v[0] || '') === 'PENDING') {
+    if (String(v[0] || '') === QUEUE_STATUS_PENDING) {
       pending++;
     }
   });
   return pending;
+}
+
+function hasPendingRequestForSheet_(queueSheet, sheetName) {
+  const lastRow = queueSheet.getLastRow();
+  if (lastRow < 2) {
+    return false;
+  }
+  const totalRows = lastRow - 1;
+  const values = queueSheet.getRange(2, 3, totalRows, 4).getValues();
+  for (let i = values.length - 1; i >= 0; i--) {
+    const queuedSheet = String(values[i][0] || '');
+    const status = String(values[i][3] || '');
+    if (queuedSheet === sheetName && status === QUEUE_STATUS_PENDING) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function writeColumnUpdates_(sheet, column, updates) {
+  if (!updates || updates.length === 0) {
+    return;
+  }
+
+  let blockStart = updates[0][0];
+  let prevRow = updates[0][0];
+  let blockValues = [[updates[0][1]]];
+
+  for (let i = 1; i < updates.length; i++) {
+    const rowNumber = updates[i][0];
+    const value = updates[i][1];
+
+    if (rowNumber === prevRow + 1) {
+      blockValues.push([value]);
+    } else {
+      sheet.getRange(blockStart, column, blockValues.length, 1).setValues(blockValues);
+      blockStart = rowNumber;
+      blockValues = [[value]];
+    }
+    prevRow = rowNumber;
+  }
+
+  sheet.getRange(blockStart, column, blockValues.length, 1).setValues(blockValues);
+}
+
+function applyButtonStyle_(rng) {
+  rng.setFontWeight('bold');
+  rng.setBackground('#C62828');
+  rng.setFontColor('#FFFFFF');
+  rng.setHorizontalAlignment('center');
+}
+
+function setButtonState_(sheet, value, note) {
+  const rng = sheet.getRange(BUTTON_CELL);
+  rng.setValue(value);
+  applyButtonStyle_(rng);
+  if (typeof note === 'string') {
+    rng.setNote(note);
+  }
 }
 
 function parseWebRequest_(e) {
