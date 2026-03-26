@@ -248,15 +248,25 @@ function sendForSheetName_(sheetName) {
 
 function enqueueSheetSend_(sheet) {
   const queue = ensureQueueSheet_(sheet.getParent());
+  const actorEmail = safeUserEmail_();
   queue.appendRow([
     Utilities.getUuid(),
     new Date(),
     sheet.getName(),
-    Session.getActiveUser().getEmail() || '',
-    Session.getEffectiveUser().getEmail() || '',
+    actorEmail,
+    actorEmail,
     'PENDING',
     '',
   ]);
+}
+
+function safeUserEmail_() {
+  try {
+    const email = Session.getActiveUser().getEmail();
+    return String(email || '');
+  } catch (err) {
+    return '';
+  }
 }
 
 function confirmarYEncolarHoja_(sheet) {
