@@ -1,6 +1,9 @@
 const SHEET_MODEL_NAME = 'MODELO';
 const BUTTON_CELL = 'H1';
 const BUTTON_LABEL = 'ENVIAR';
+const BUTTON_QUEUED_LABEL = 'EN COLA';
+const BUTTON_CANCELLED_LABEL = 'CANCELADO';
+const BUTTON_PENDING_CONFIRM_LABEL = 'PENDIENTE_CONFIRMACION';
 const QUEUE_SHEET_NAME = '_ENVIO_COLA';
 const OWNER_EMAIL = 'booking@artesbuhomanagement.com';
 const BRAND_NAME = 'Artes Buho';
@@ -98,7 +101,7 @@ function onOpen() {
     .addItem('Preparar boton en hoja actual', 'prepararBotonHojaActual')
     .addItem('Preparar botones en todas las hojas', 'prepararBotonesTodasLasBandas')
     .addSeparator()
-    .addItem('Enviar hoja actual (cola)', 'enviarInformeDesdeBoton')
+    .addItem('ENVIAR (con confirmacion)', 'enviarHojaActualConConfirmacion')
     .addItem('Procesar cola ahora', 'procesarColaAhora')
     .addToUi();
 }
@@ -120,7 +123,7 @@ function prepararBotonHojaActual() {
   rng.setFontColor('#FFFFFF');
   rng.setHorizontalAlignment('center');
   rng.setNote(
-    'Escribe ENVIAR y pulsa Enter. Se enviara desde la cuenta corporativa cuando la cola se procese.'
+    'Pulsa ENVIAR y confirma en la ventana emergente. Si no aparece popup, usa menu SITUACION BANDAS > ENVIAR (con confirmacion).'
   );
   return { ok: true, sheet: sheet.getName(), cell: BUTTON_CELL };
 }
@@ -134,6 +137,11 @@ function enviarInformeDesdeBoton() {
   const sheet = SpreadsheetApp.getActiveSheet();
   enqueueSheetSend_(sheet);
   return { ok: true, queued: true, sheet: sheet.getName() };
+}
+
+function enviarHojaActualConConfirmacion() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  return confirmarYEncolarHoja_(sheet);
 }
 
 function onEditRouter(e) {
@@ -153,8 +161,18 @@ function onEditRouter(e) {
     return;
   }
 
-  enqueueSheetSend_(sheet);
-  e.range.setValue('EN COLA');
+  try {
+    const result = confirmarYEncolarHoja_(sheet);
+    if (!result.queued) {
+      e.range.setValue(BUTTON_CANCELLED_LABEL);
+    }
+  } catch (err) {
+    // En algunos contextos de trigger no hay UI para popup.
+    e.range.setValue(BUTTON_PENDING_CONFIRM_LABEL);
+    e.range.setNote(
+      'No se pudo abrir popup de confirmacion desde esta accion. Usa menu SITUACION BANDAS > ENVIAR (con confirmacion).'
+    );
+  }
 }
 
 function processQueueTick() {
@@ -241,6 +259,43 @@ function enqueueSheetSend_(sheet) {
   ]);
 }
 
+function confirmarYEncolarHoja_(sheet) {
+  if (!sheet) {
+    throw new Error('No hay hoja activa.');
+  }
+  const sheetName = String(sheet.getName() || '');
+  const upperName = sheetName.toUpperCase();
+  if (upperName === SHEET_MODEL_NAME || upperName === QUEUE_SHEET_NAME) {
+    throw new Error('Esta hoja no admite envio.');
+  }
+
+  const payload = readBandPayload_(sheet);
+  if (!payload.to) {
+    throw new Error('No hay correo destino en B2.');
+  }
+
+  const ui = SpreadsheetApp.getUi();
+  const message =
+    'Banda: ' + payload.banda + '\n' +
+    'Destino: ' + payload.to + '\n' +
+    'Asunto: ' + payload.subject + '\n\n' +
+    'Quieres enviar este correo?';
+  const decision = ui.alert(
+    'Confirmar envio',
+    message,
+    ui.ButtonSet.YES_NO
+  );
+
+  if (decision !== ui.Button.YES) {
+    sheet.getRange(BUTTON_CELL).setValue(BUTTON_CANCELLED_LABEL);
+    return { ok: true, queued: false, cancelled: true, sheet: sheetName };
+  }
+
+  enqueueSheetSend_(sheet);
+  sheet.getRange(BUTTON_CELL).setValue(BUTTON_QUEUED_LABEL);
+  return { ok: true, queued: true, sheet: sheetName };
+}
+
 function readBandPayload_(sheet) {
   const banda = String(sheet.getRange('B1').getValue() || sheet.getName()).trim();
   const to = String(sheet.getRange('B2').getValue() || '').trim();
@@ -303,7 +358,7 @@ function prepareButtonForSheet_(sheet) {
   rng.setFontColor('#FFFFFF');
   rng.setHorizontalAlignment('center');
   rng.setNote(
-    'Escribe ENVIAR y pulsa Enter. Se enviara desde la cuenta corporativa cuando la cola se procese.'
+    'Pulsa ENVIAR y confirma en la ventana emergente. Si no aparece popup, usa menu SITUACION BANDAS > ENVIAR (con confirmacion).'
   );
 }
 
