@@ -1,0 +1,40 @@
+name: reports-scheduler
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  due-reports:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_VISIBLE_NAME: SITUACION BANDAS
+      PROJECT_SLUG: SITUACION-BANDAS
+      COMPANY_NAME: Artes Buho
+      AUTHOR_NAME: RUBEN COTON
+      TIMEZONE: Europe/Madrid
+      GOOGLE_SHEET_ID: 1YUOtxFLvryw_LmkoI2NB3FBeNucw0hFDdQa2qflr-xs
+      USE_PUBLIC_SHEET_EXPORT: "true"
+      GOOGLE_CLASP_PROFILE: ${{ secrets.GOOGLE_CLASP_PROFILE }}
+      GOOGLE_CLASP_FILE: ${{ secrets.GOOGLE_CLASP_FILE }}
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_FILE }}
+      EMAIL_ENABLED: "false"
+      EMAIL_DRY_RUN_DEFAULT: "true"
+      LOG_LEVEL: INFO
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Run due reports (Europe/Madrid logic in code)
+        run: python scripts/run_due_reports.py
